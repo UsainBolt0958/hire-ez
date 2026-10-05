@@ -86,3 +86,88 @@ $$;
 
 REVOKE ALL ON FUNCTION public.submit_job_application(UUID, TEXT, TEXT, TEXT, TEXT) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.submit_job_application(UUID, TEXT, TEXT, TEXT, TEXT) TO authenticated;
+
+-- Only permit recruiters to schedule shortlisted applicants for their own jobs.
+DROP POLICY IF EXISTS "Recruiters can insert schedules" ON public.interview_schedules;
+CREATE POLICY "Recruiters can insert schedules" ON public.interview_schedules FOR INSERT WITH CHECK (
+  recruiter_id IN (SELECT id FROM public.recruiter_profiles WHERE user_id = auth.uid())
+  AND applicant_id IN (
+    SELECT applicants.id
+    FROM public.applicants
+    JOIN public.jobs ON jobs.id = applicants.job_id
+    WHERE applicants.status = 'Shortlisted'
+      AND jobs.recruiter_id = interview_schedules.recruiter_id
+  )
+);
+
+-- Return resume details only to the recruiter who owns the applicant's job.
+CREATE OR REPLACE FUNCTION public.get_applicant_resume(p_applicant_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_resume JSONB;
+BEGIN
+  SELECT jsonb_build_object(
+    'name', applicant.name,
+    'role', COALESCE(jobseeker.target_role, applicant.role),
+    'email', applicant.email,
+    'phone', user_profile.phone,
+    'location', user_profile.location,
+    'summary', jobseeker.summary,
+    'skills', COALESCE(to_jsonb(jobseeker.skills), '[]'::JSONB),
+    'experience', COALESCE((
+      SELECT jsonb_agg(jsonb_build_object(
+        'role', experience.role,
+        'org', experience.company,
+        'when', experience.dates,
+        'desc', COALESCE(experience.description, '')
+      ) ORDER BY experience.created_at DESC)
+      FROM public.experience
+      WHERE experience.user_id = applicant.user_id
+    ), '[]'::JSONB),
+    'education', COALESCE((
+      SELECT jsonb_agg(jsonb_build_object(
+        'deg', education.degree,
+        'org', education.institution,
+        'when', education.dates,
+        'desc', COALESCE(education.description, '')
+      ) ORDER BY education.created_at DESC)
+      FROM public.education
+      WHERE education.user_id = applicant.user_id
+    ), '[]'::JSONB),
+    'portfolio', COALESCE((
+      SELECT jsonb_agg(jsonb_build_object(
+        'title', portfolio.title,
+        'type', COALESCE(portfolio.type, ''),
+        'link', COALESCE(portfolio.link, ''),
+        'tags', COALESCE(to_jsonb(portfolio.tags), '[]'::JSONB),
+        'desc', COALESCE(portfolio.description, '')
+      ) ORDER BY portfolio.created_at DESC)
+      FROM public.portfolio
+      WHERE portfolio.user_id = applicant.user_id
+    ), '[]'::JSONB)
+  ) INTO v_resume
+  FROM public.applicants AS applicant
+  JOIN public.jobs AS job ON job.id = applicant.job_id
+  LEFT JOIN public.user_profiles AS user_profile ON user_profile.user_id = applicant.user_id
+  LEFT JOIN public.jobseeker_profiles AS jobseeker ON jobseeker.user_id = applicant.user_id
+  WHERE applicant.id = p_applicant_id
+    AND EXISTS (
+      SELECT 1
+      FROM public.recruiter_profiles AS recruiter
+      WHERE recruiter.user_id = auth.uid()
+        AND recruiter.id = job.recruiter_id
+    );
+
+  IF v_resume IS NULL THEN
+    RAISE EXCEPTION 'Applicant not found or access denied';
+  END IF;
+  RETURN v_resume;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_applicant_resume(UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.get_applicant_resume(UUID) TO authenticated;

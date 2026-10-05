@@ -966,6 +966,8 @@ footer.site{margin-top:80px;border-top:1px solid var(--border);padding:50px 0 26
   display:none;
 }
 .modal-box:has(.ai-fit-modal){max-width:700px;padding:0;overflow-y:auto;}
+.modal-box:has(.applicant-resume-modal){max-width:880px;padding:20px;}
+.applicant-resume-scroll{max-height:70vh;overflow:auto;}
 .ai-fit-modal{padding:26px 30px;color:var(--ink);}
 .ai-fit-modal-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding-bottom:18px;border-bottom:1px solid var(--border);}
 .ai-fit-modal-header h3{font-size:21px;margin:5px 0 3px;}
@@ -1002,6 +1004,7 @@ footer.site{margin-top:80px;border-top:1px solid var(--border);padding:50px 0 26
 @keyframes aiFitSpin{to{transform:rotate(360deg);}}
 @media(max-width:560px){
   .modal-box:has(.ai-fit-modal){max-width:calc(100vw - 32px);}
+  .modal-box:has(.applicant-resume-modal){max-width:calc(100vw - 24px);padding:12px;}
   .ai-fit-modal{padding:20px 18px;}
   .ai-fit-score-row{gap:14px;}
   .ai-fit-gauge{width:88px;height:88px;flex-basis:88px;}

@@ -83,7 +83,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_jobseeker_profiles_user_unique ON public.j
 CREATE UNIQUE INDEX IF NOT EXISTS idx_recruiter_profiles_user_unique ON public.recruiter_profiles(user_id);
 ```
 
-For an existing project, also run the contents of `supabase-application-workflow.sql` in the SQL Editor. This installs the authenticated transaction used by Apply. It creates the application, recruiter applicant record, and in-app Mail notifications together, so a partial save cannot be reported as a successful application.
+For an existing project, run the contents of `supabase-application-workflow.sql` in the SQL Editor. It installs the authenticated application transaction, recruiter-only resume access, and the database rule that only allows scheduling shortlisted candidates. If you ran an earlier version of this migration, run the updated file again; it is safe to rerun.
 
 ## Step 6: Add Sample Data (Optional)
 
@@ -148,6 +148,7 @@ INSERT INTO public.interview_questions (category, question, tip) VALUES
 7. Check the Supabase dashboard → **Authentication** → **Users** to see the new user
 8. Check the database tables to see the profile data
 9. Apply to a job, then verify the application appears in the jobseeker's applied state and the recruiter's Applicants and Mail sections
+10. From Applicants, view or download a candidate resume; shortlist a candidate before scheduling them from Schedule
 
 ## Step 8: Test Data Loading
 

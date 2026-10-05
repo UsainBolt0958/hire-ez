@@ -469,12 +469,8 @@ async function loadInterviewQuestionsFromSupabase() {
 // Applicants are loaded from Supabase only.
 let APPLICANTS = [];
 let postedJobsByRecruiter=[];
-// Schedule data - will be loaded from Supabase or use fallback data
-let SCHEDULE = [
-  {id:1,candidate:'Diya Kapoor',role:'Frontend Developer',date:'12',month:'AUG',time:'11:00 AM'},
-  {id:2,candidate:'Kabir Singh',role:'Data Analyst',date:'14',month:'AUG',time:'3:30 PM'},
-  {id:3,candidate:'Meera Nair',role:'QA Engineer',date:'18',month:'AUG',time:'10:00 AM'},
-];
+// Schedule data is loaded from Supabase only.
+let SCHEDULE = [];
 
 // Load applicants from Supabase
 async function loadApplicantsFromSupabase() {
@@ -519,6 +515,8 @@ async function loadApplicantsFromSupabase() {
     
     APPLICANTS = (data || []).map(applicant => ({
       id: applicant.id,
+      jobId: applicant.job_id,
+      userId: applicant.user_id,
       name: applicant.name,
       role: applicant.role,
       exp: applicant.experience || 'Not specified',
@@ -532,9 +530,9 @@ async function loadApplicantsFromSupabase() {
 
 // Load schedule from Supabase
 async function loadScheduleFromSupabase() {
+  SCHEDULE = [];
   const client = getSupabase();
   if (!client || !isSupabaseConfigured()) {
-    console.log('Using fallback schedule data');
     return;
   }
   
@@ -543,11 +541,12 @@ async function loadScheduleFromSupabase() {
     if (!user) return;
     
     // Get recruiter profile
-    const { data: recruiterProfile } = await client
+    const { data: recruiterProfile, error: profileError } = await client
       .from('recruiter_profiles')
       .select('id')
       .eq('user_id', user.id)
-      .single();
+      .maybeSingle();
+    if (profileError) throw profileError;
     
     if (!recruiterProfile) return;
     
@@ -559,20 +558,19 @@ async function loadScheduleFromSupabase() {
     
     if (error) throw error;
     
-    if (data && data.length > 0) {
-      SCHEDULE = data.map(schedule => {
-        const date = new Date(schedule.interview_date);
-        return {
-          id: schedule.id,
-          candidate: schedule.candidate_name,
-          role: schedule.role,
-          date: String(date.getDate()).padStart(2, '0'),
-          month: date.toLocaleString('en', { month: 'short' }).toUpperCase(),
-          time: schedule.interview_time
-        };
-      });
-      console.log(`Loaded ${SCHEDULE.length} scheduled interviews from Supabase`);
-    }
+    SCHEDULE = (data || []).map(schedule => {
+      const date = new Date(`${schedule.interview_date}T00:00:00`);
+      return {
+        id: schedule.id,
+        applicantId: schedule.applicant_id,
+        candidate: schedule.candidate_name,
+        role: schedule.role,
+        date: String(date.getDate()).padStart(2, '0'),
+        month: date.toLocaleString('en', { month: 'short' }).toUpperCase(),
+        time: schedule.interview_time
+      };
+    });
+    console.log(`Loaded ${SCHEDULE.length} scheduled interviews from Supabase`);
   } catch (error) {
     console.error('Error loading schedule from Supabase:', error);
   }
@@ -2663,16 +2661,19 @@ function pdfSectionTitle(label){
   return `<div class="pdf-sec-title"><span class="pdf-sec-line"></span><h2>${label}</h2></div>`;
 }
 
-function buildResumeExportMarkup(){
-  const name = (document.getElementById('in-name')?.value || profileName || '').trim();
-  const role = (document.getElementById('in-role')?.value || profileRole || '').trim();
-  const email = (document.getElementById('in-email')?.value || profileContact.email || '').trim();
-  const phone = (document.getElementById('in-phone')?.value || profileContact.phone || '').trim();
-  const loc = (document.getElementById('in-loc')?.value || profileContact.loc || '').trim();
-  const summary = (document.getElementById('in-summary')?.value || profileSummary || '').trim();
-  const skills = (document.getElementById('in-skills')?.value || profileSkills.join(', ')).split(',').map(s => s.trim()).filter(Boolean);
-  const currentEduEntries = sortEducationEntries((eduEntries && eduEntries.length) ? eduEntries : profileEducation);
-  const currentExpEntries = (expEntries && expEntries.length) ? expEntries : profileExperience;
+function buildResumeExportMarkup(resumeData = null){
+  const name = ((resumeData ? resumeData.name : (document.getElementById('in-name')?.value || profileName)) || '').trim();
+  const role = ((resumeData ? resumeData.role : (document.getElementById('in-role')?.value || profileRole)) || '').trim();
+  const email = ((resumeData ? resumeData.email : (document.getElementById('in-email')?.value || profileContact.email)) || '').trim();
+  const phone = ((resumeData ? resumeData.phone : (document.getElementById('in-phone')?.value || profileContact.phone)) || '').trim();
+  const loc = ((resumeData ? resumeData.location : (document.getElementById('in-loc')?.value || profileContact.loc)) || '').trim();
+  const summary = ((resumeData ? resumeData.summary : (document.getElementById('in-summary')?.value || profileSummary)) || '').trim();
+  const skills = resumeData
+    ? (Array.isArray(resumeData.skills) ? resumeData.skills : [])
+    : (document.getElementById('in-skills')?.value || profileSkills.join(', ')).split(',').map(s => s.trim()).filter(Boolean);
+  const currentEduEntries = sortEducationEntries(resumeData ? (resumeData.education || []) : ((eduEntries && eduEntries.length) ? eduEntries : profileEducation));
+  const currentExpEntries = resumeData ? (resumeData.experience || []) : ((expEntries && expEntries.length) ? expEntries : profileExperience);
+  const currentPortfolio = resumeData ? (resumeData.portfolio || []) : profilePortfolio;
   const initials = profileInitials(name);
   const avatarColor = colorFor(name || 'user');
 
@@ -2709,7 +2710,7 @@ function buildResumeExportMarkup(){
     </div>
   `).join('');
 
-  const portfolioItems = (profilePortfolio || []).map(item => `
+  const portfolioItems = currentPortfolio.map(item => `
     <div class="pdf-project">
       <div class="pdf-project-accent"></div>
       <div class="pdf-project-inner">
@@ -2742,21 +2743,21 @@ function buildResumeExportMarkup(){
           ${summary ? `<section class="pdf-block">${pdfSectionTitle('About')}<p class="pdf-summary">${pdfEsc(summary)}</p></section>` : ''}
           ${currentExpEntries.length ? `<section class="pdf-block">${pdfSectionTitle('Experience')}<div class="pdf-timeline">${expItems}</div></section>` : ''}
           ${currentEduEntries.length ? `<section class="pdf-block">${pdfSectionTitle('Education')}<div class="pdf-timeline">${eduItems}</div></section>` : ''}
-          ${profilePortfolio.length ? `<section class="pdf-block">${pdfSectionTitle('Portfolio')}<div class="pdf-projects">${portfolioItems}</div></section>` : ''}
+          ${currentPortfolio.length ? `<section class="pdf-block">${pdfSectionTitle('Portfolio')}<div class="pdf-projects">${portfolioItems}</div></section>` : ''}
         </main>
       </div>
     </div>
   `;
 }
 
-async function downloadResumePdf(){
+async function downloadResumePdf(resumeData = null){
   if(!window.jspdf || !window.jspdf.jsPDF || !window.html2canvas){
     showToast('PDF export is unavailable right now.');
     return;
   }
 
   const exportContainer = document.createElement('div');
-  exportContainer.innerHTML = buildResumeExportMarkup();
+  exportContainer.innerHTML = buildResumeExportMarkup(resumeData);
   exportContainer.style.position = 'fixed';
   exportContainer.style.left = '0';
   exportContainer.style.top = '0';
@@ -2807,7 +2808,7 @@ async function downloadResumePdf(){
       heightLeft -= (pageHeight - margin * 2);
     }
 
-    const fileName = ((document.getElementById('in-name')?.value || profileName || 'resume').trim() || 'resume')
+    const fileName = (((resumeData && resumeData.name) || document.getElementById('in-name')?.value || profileName || 'resume').trim() || 'resume')
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'resume';
@@ -3905,10 +3906,14 @@ async function renderApplicantsBody(){
       <td>${a.role}</td><td class="muted">${a.exp}</td>
       <td><span class="badge badge-${a.status.toLowerCase()}">${a.status}</span></td>
       <td class="action-row">
+        <button class="btn btn-sm btn-ghost" data-view-resume="${escapeHtml(a.id)}">${icon('file')} View resume</button>
+        <button class="btn btn-sm btn-ghost" data-download-resume="${escapeHtml(a.id)}">${icon('download')} Download PDF</button>
         <button class="btn btn-sm btn-ghost" data-status="${a.id}:Shortlisted">Shortlist</button>
         <button class="btn btn-sm btn-outline" data-status="${a.id}:Rejected">Reject</button>
       </td>
     </tr>`).join('') : '<tr><td colspan="5" class="muted" style="text-align:center;padding:28px;">No applications yet.</td></tr>';
+  el.querySelectorAll('[data-view-resume]').forEach(button=>button.addEventListener('click',()=>viewApplicantResume(button.dataset.viewResume)));
+  el.querySelectorAll('[data-download-resume]').forEach(button=>button.addEventListener('click',()=>downloadApplicantResume(button.dataset.downloadResume)));
   el.querySelectorAll('[data-status]').forEach(b=>b.addEventListener('click',async ()=>{
     const [id,status]=b.dataset.status.split(':');
     const a=applicants.find(x=>x.id==id);
@@ -3979,6 +3984,35 @@ async function renderApplicantsBody(){
   }));
 }
 
+async function getApplicantResume(applicantId){
+  const client = getSupabase();
+  if(!client || !isSupabaseConfigured()) throw new Error('Resume access requires the Supabase backend');
+  const {data, error} = await client.rpc('get_applicant_resume', {p_applicant_id:applicantId});
+  if(error) throw error;
+  if(!data) throw new Error('Resume not found');
+  return data;
+}
+
+async function viewApplicantResume(applicantId){
+  try{
+    const resume = await getApplicantResume(applicantId);
+    openModal(`<div class="applicant-resume-modal"><div class="modal-head"><div><h3>${escapeHtml(resume.name || 'Candidate resume')}</h3><p class="muted">${escapeHtml(resume.role || '')}</p></div><div class="action-row"><button class="btn btn-sm btn-primary" id="downloadApplicantResumeBtn">${icon('download')} Download PDF</button><button class="btn-icon" onclick="closeModal()" aria-label="Close">${icon('x')}</button></div></div><div class="applicant-resume-scroll">${buildResumeExportMarkup(resume)}</div></div>`);
+    document.getElementById('downloadApplicantResumeBtn')?.addEventListener('click',()=>downloadResumePdf(resume));
+  }catch(error){
+    console.error('Could not load applicant resume:', error);
+    showToast(error.message || 'Could not load this resume');
+  }
+}
+
+async function downloadApplicantResume(applicantId){
+  try{
+    await downloadResumePdf(await getApplicantResume(applicantId));
+  }catch(error){
+    console.error('Could not download applicant resume:', error);
+    showToast(error.message || 'Could not download this resume');
+  }
+}
+
 /* ================= SCREEN: RECRUITER SCHEDULE ================= */
 function screenRecruiterSchedule(){
   return `
@@ -4006,11 +4040,17 @@ async function renderScheduleList(){
     </div>`).join('');
 }
 async function openScheduleModal(){
+  await loadApplicantsFromSupabase();
+  const shortlistedApplicants = APPLICANTS.filter(applicant=>applicant.status === 'Shortlisted');
+  if(shortlistedApplicants.length === 0){
+    showToast('Shortlist a candidate before scheduling an interview');
+    return;
+  }
+
   openModal(`
     <div class="modal-head"><h3>Schedule an interview</h3><button class="btn-icon" onclick="closeModal()">${icon('x')}</button></div>
     <form id="schedForm">
-      <div class="field"><label>Candidate</label><input id="sf-cand" required></div>
-      <div class="field"><label>Role</label><input id="sf-role" required></div>
+      <div class="field"><label>Shortlisted candidate</label><select id="sf-candidate" required><option value="">Select a candidate</option>${shortlistedApplicants.map(applicant=>`<option value="${escapeHtml(applicant.id)}">${escapeHtml(applicant.name)} · ${escapeHtml(applicant.role)}</option>`).join('')}</select></div>
       <div class="field-row"><div class="field"><label>Date</label><input id="sf-date" type="date" required></div>
       <div class="field"><label>Time</label><input id="sf-time" type="time" required></div></div>
       <button class="btn btn-primary" style="width:100%;margin-top:6px;" type="submit">${icon('calendar')} Confirm</button>
@@ -4019,67 +4059,61 @@ async function openScheduleModal(){
   document.getElementById('schedForm').addEventListener('submit',async e=>{
     e.preventDefault();
     
+    const applicant = shortlistedApplicants.find(item=>String(item.id) === document.getElementById('sf-candidate').value);
+    if(!applicant){
+      showToast('Select a shortlisted candidate');
+      return;
+    }
     const scheduleData = {
-      candidate: document.getElementById('sf-cand').value,
-      role: document.getElementById('sf-role').value,
+      applicantId: applicant.id,
+      candidate: applicant.name,
+      role: applicant.role,
       date: document.getElementById('sf-date').value,
       time: document.getElementById('sf-time').value
     };
-    
-    const d = new Date(scheduleData.date + 'T00:00:00');
-    
-    // Try to save to Supabase first
+
     const client = getSupabase();
-    if (client && isSupabaseConfigured()) {
-      try {
-        const { data: { user } } = await client.auth.getUser();
-        if (user) {
-          // Get recruiter profile
-          const { data: recruiterProfile } = await client
-            .from('recruiter_profiles')
-            .select('id')
-            .eq('user_id', user.id)
-            .single();
-          
-          if (recruiterProfile) {
-            const { error } = await client
-              .from('interview_schedules')
-              .insert({
-                recruiter_id: recruiterProfile.id,
-                candidate_name: scheduleData.candidate,
-                role: scheduleData.role,
-                interview_date: scheduleData.date,
-                interview_time: scheduleData.time
-              });
-            
-            if (error) throw error;
-            
-            // Reload schedule from Supabase
-            await loadScheduleFromSupabase();
-            closeModal();
-            renderScheduleList();
-            showToast('Interview scheduled');
-            return;
-          }
-        }
-      } catch (error) {
-        console.error('Error scheduling interview in Supabase:', error);
-        // Fall back to local storage
-      }
+    if(!client || !isSupabaseConfigured()){
+      showToast('Scheduling requires the Supabase backend');
+      return;
     }
-    
-    // Fallback to local storage
-    SCHEDULE.push({
-      id: Date.now(),
-      candidate: scheduleData.candidate,
-      role: scheduleData.role,
-      date: String(d.getDate()).padStart(2, '0'),
-      month: d.toLocaleString('en', { month: 'short' }).toUpperCase(),
-      time: scheduleData.time
-    });
-    closeModal();
-    renderScheduleList();
-    showToast('Interview scheduled (local)');
+    const submitButton = e.currentTarget.querySelector('[type="submit"]');
+    submitButton.disabled = true;
+    try{
+      const {data:{user}} = await client.auth.getUser();
+      if(!user) throw new Error('Sign in before scheduling an interview');
+      const {data:recruiterProfile, error:profileError} = await client
+        .from('recruiter_profiles').select('id').eq('user_id', user.id).single();
+      if(profileError) throw profileError;
+      const {error} = await client.from('interview_schedules').insert({
+        recruiter_id:recruiterProfile.id,
+        applicant_id:scheduleData.applicantId,
+        candidate_name:scheduleData.candidate,
+        role:scheduleData.role,
+        interview_date:scheduleData.date,
+        interview_time:scheduleData.time
+      });
+      if(error) throw error;
+      if(applicant.userId){
+        const {error:notificationError} = await client.from('notifications').insert({
+          user_id:applicant.userId,
+          type:'interview',
+          title:'Interview scheduled',
+          message:`Your interview for ${scheduleData.role} is scheduled for ${scheduleData.date} at ${scheduleData.time}.`,
+          job_title:scheduleData.role,
+          company:recruiterProfile.company || 'Company'
+        });
+        if(notificationError) console.error('Could not notify candidate about interview:', notificationError);
+      }
+      await loadScheduleFromSupabase();
+      closeModal();
+      await renderScheduleList();
+      showToast('Interview scheduled');
+    }catch(error){
+      console.error('Error scheduling interview in Supabase:', error);
+      submitButton.disabled = false;
+      showToast(error.message || 'Could not schedule this interview');
+    }
   });
 }
 
@@ -4401,7 +4435,11 @@ async function afterRender(key){
     });
   }
   if(key==='recruiter:applicants'){await renderApplicantsBody();}
-  if(key==='recruiter:schedule'){renderScheduleList();document.getElementById('addScheduleBtn').addEventListener('click',openScheduleModal);}
+  if(key==='recruiter:schedule'){
+    await loadApplicantsFromSupabase();
+    await renderScheduleList();
+    document.getElementById('addScheduleBtn').addEventListener('click',openScheduleModal);
+  }
 }
 
 /* ================= INIT ================= */
