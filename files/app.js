@@ -88,6 +88,7 @@ const NAV = {
       {id:'profile',label:'Profile',icon:'user'},
       {id:'post',label:'Post a job',icon:'plus'},
       {id:'applicants',label:'Applicants',icon:'users'},
+      {id:'mail',label:'Mail',icon:'mail'},
       {id:'schedule',label:'Schedule',icon:'calendar'},
     ]
   }
@@ -121,6 +122,7 @@ function colorFor(seed){let h=0;for(let i=0;i<seed.length;i++)h=seed.charCodeAt(
 
 // Jobs data - will be loaded from Supabase only
 let JOBS = [];
+let appliedJobIds = new Set();
 let savedJobs=new Set();
 let jobFilters={type:'All',search:'',loc:''};
 let showSavedOnly=false;
@@ -464,15 +466,8 @@ async function loadInterviewQuestionsFromSupabase() {
   }
 }
 
-// Applicants data - will be loaded from Supabase or use fallback data
-let APPLICANTS = [
-  {id:1,name:'Aarav Mehta',role:'Frontend Developer',exp:'2 yrs',status:'Applied'},
-  {id:2,name:'Diya Kapoor',role:'Frontend Developer',exp:'3 yrs',status:'Shortlisted'},
-  {id:3,name:'Rohan Sharma',role:'Backend Engineer',exp:'4 yrs',status:'Applied'},
-  {id:4,name:'Ishita Rao',role:'UX Designer',exp:'1 yr',status:'Rejected'},
-  {id:5,name:'Kabir Singh',role:'Data Analyst',exp:'2 yrs',status:'Shortlisted'},
-  {id:6,name:'Meera Nair',role:'QA Engineer',exp:'3 yrs',status:'Applied'},
-];
+// Applicants are loaded from Supabase only.
+let APPLICANTS = [];
 let postedJobsByRecruiter=[];
 // Schedule data - will be loaded from Supabase or use fallback data
 let SCHEDULE = [
@@ -483,9 +478,9 @@ let SCHEDULE = [
 
 // Load applicants from Supabase
 async function loadApplicantsFromSupabase() {
+  APPLICANTS = [];
   const client = getSupabase();
   if (!client || !isSupabaseConfigured()) {
-    console.log('Using fallback applicants data');
     return;
   }
   
@@ -494,19 +489,21 @@ async function loadApplicantsFromSupabase() {
     if (!user) return;
     
     // Get recruiter profile
-    const { data: recruiterProfile } = await client
+    const { data: recruiterProfile, error: profileError } = await client
       .from('recruiter_profiles')
       .select('id')
       .eq('user_id', user.id)
-      .single();
+      .maybeSingle();
+    if (profileError) throw profileError;
     
     if (!recruiterProfile) return;
     
     // Get jobs posted by this recruiter
-    const { data: jobs } = await client
+    const { data: jobs, error: jobsError } = await client
       .from('jobs')
       .select('id')
       .eq('recruiter_id', recruiterProfile.id);
+    if (jobsError) throw jobsError;
     
     if (!jobs || jobs.length === 0) return;
     
@@ -520,16 +517,14 @@ async function loadApplicantsFromSupabase() {
     
     if (error) throw error;
     
-    if (data && data.length > 0) {
-      APPLICANTS = data.map(applicant => ({
-        id: applicant.id,
-        name: applicant.name,
-        role: applicant.role,
-        exp: applicant.experience || 'Not specified',
-        status: applicant.status
-      }));
-      console.log(`Loaded ${APPLICANTS.length} applicants from Supabase`);
-    }
+    APPLICANTS = (data || []).map(applicant => ({
+      id: applicant.id,
+      name: applicant.name,
+      role: applicant.role,
+      exp: applicant.experience || 'Not specified',
+      status: applicant.status
+    }));
+    console.log(`Loaded ${APPLICANTS.length} applicants from Supabase`);
   } catch (error) {
     console.error('Error loading applicants from Supabase:', error);
   }
@@ -1075,7 +1070,8 @@ async function markNotificationAsRead(notificationId){
   }
 }
 
-function openMailModal(){
+async function openMailModal(){
+  await loadNotificationsFromSupabase();
   const notifications = window.MAIL_NOTIFICATIONS || [];
   const mailContent = renderMailItems(notifications);
   
@@ -1629,6 +1625,9 @@ async function loadRecruiterProfileFromSupabase() {
 async function renderScreen(){
   const main=document.getElementById('mainContent');
   const key=state.persona+':'+state.tab;
+  if(key==='jobseeker:mail' || key==='recruiter:mail'){
+    await loadNotificationsFromSupabase();
+  }
   const renderers={
     'jobseeker:overview':screenOverview,
     'jobseeker:profile':screenProfile,
@@ -1642,6 +1641,7 @@ async function renderScreen(){
     'recruiter:profile':screenRecruiterProfile,
     'recruiter:post':screenRecruiterPost,
     'recruiter:applicants':screenRecruiterApplicants,
+    'recruiter:mail':screenMail,
     'recruiter:schedule':screenRecruiterSchedule,
   };
   
@@ -2927,7 +2927,7 @@ function renderJobList(){
         <button class="save-btn ${savedJobs.has(j.id)?'saved':''}" data-save="${j.id}" aria-label="Save job">${icon(savedJobs.has(j.id)?'heart':'heart')}</button>
         <span class="job-posted">${j.posted}</span>
         <button class="btn btn-outline btn-sm ai-fit-trigger" data-ai-check="${escapeHtml(j.id)}">${icon('star')} AI Check</button>
-        <button class="btn btn-primary btn-sm" data-apply="${j.id}">Apply</button>
+        <button class="btn btn-primary btn-sm" data-apply="${escapeHtml(j.id)}" ${appliedJobIds.has(String(j.id))?'disabled':''}>${appliedJobIds.has(String(j.id))?'Applied':'Apply'}</button>
       </div>
     </div>`).join('');
   listEl.querySelectorAll('[data-save]').forEach(b=>b.addEventListener('click',async ()=>{
@@ -2982,7 +2982,23 @@ function renderJobList(){
     renderJobList();
   }));
   listEl.querySelectorAll('[data-ai-check]').forEach(button=>button.addEventListener('click',()=>checkJobResumeFit(button.dataset.aiCheck,button)));
-  listEl.querySelectorAll('[data-apply]').forEach(b=>b.addEventListener('click',()=>openApplyModal(+b.dataset.apply)));
+  listEl.querySelectorAll('[data-apply]:not(:disabled)').forEach(b=>b.addEventListener('click',()=>openApplyModal(b.dataset.apply)));
+}
+
+async function loadMyApplicationsFromSupabase(){
+  appliedJobIds = new Set();
+  const client = getSupabase();
+  if(!client || !isSupabaseConfigured()) return;
+
+  try{
+    const {data:{user}} = await client.auth.getUser();
+    if(!user) return;
+    const {data, error} = await client.from('applications').select('job_id').eq('user_id', user.id);
+    if(error) throw error;
+    appliedJobIds = new Set((data || []).map(application => String(application.job_id)));
+  }catch(error){
+    console.error('Error loading your applications from Supabase:', error);
+  }
 }
 
 let aiFitRequestSequence = 0;
@@ -3126,18 +3142,22 @@ async function checkJobResumeFit(jobId, button){
 }
 
 async function openApplyModal(id){
-  const j=JOBS.find(x=>x.id===id);
+  const j=JOBS.find(x=>String(x.id)===String(id));
+  if(!j){
+    showToast('This job is no longer available');
+    return;
+  }
   
   // Pre-fill with user data if available
   const userName = profileName || '';
-  const userEmail = userEmail || '';
+  const applicantEmail = profileContact.email || userEmail || '';
   
   openModal(`
     <div class="modal-head"><div><h3>Apply to ${j.title}</h3><p class="muted" style="font-size:13px;">${j.company} · ${j.location}</p></div>
     <button class="btn-icon" onclick="closeModal()">${icon('x')}</button></div>
     <form id="applyForm">
-      <div class="field"><label>Full name</label><input id="apply-name" value="${userName}" required></div>
-      <div class="field"><label>Email</label><input id="apply-email" type="email" value="${userEmail}" required></div>
+      <div class="field"><label>Full name</label><input id="apply-name" value="${escapeHtml(userName)}" required></div>
+      <div class="field"><label>Email</label><input id="apply-email" type="email" value="${escapeHtml(applicantEmail)}" required></div>
       <div class="field" style="margin-bottom:20px;"><label>Note to recruiter (optional)</label><textarea id="apply-note" placeholder="Say a bit about why you're a fit..."></textarea></div>
       <button class="btn btn-primary" style="width:100%;" type="submit">${icon('send')} Submit application</button>
     </form>
@@ -3146,73 +3166,41 @@ async function openApplyModal(id){
   document.getElementById('applyForm').addEventListener('submit',async e=>{
     e.preventDefault();
     
+    const submitButton = e.currentTarget.querySelector('[type="submit"]');
     const applicationData = {
-      name: document.getElementById('apply-name').value,
-      email: document.getElementById('apply-email').value,
-      note: document.getElementById('apply-note').value
+      name: document.getElementById('apply-name').value.trim(),
+      email: document.getElementById('apply-email').value.trim(),
+      note: document.getElementById('apply-note').value.trim()
     };
-    
-    // Try to save to Supabase first
     const client = getSupabase();
-    if (client && isSupabaseConfigured()) {
-      try {
-        const { data: { user } } = await client.auth.getUser();
-        if (user) {
-          // Save application to Supabase
-          const { error: applicationError } = await client
-            .from('applications')
-            .insert({
-              job_id: id,
-              user_id: user.id,
-              status: 'Applied',
-              notes: applicationData.note
-            });
-          
-          if (applicationError) throw applicationError;
-          
-          // Also add to applicants table for recruiter view
-          const { error: applicantError } = await client
-            .from('applicants')
-            .insert({
-              job_id: id,
-              user_id: user.id,
-              name: applicationData.name,
-              email: applicationData.email,
-              role: j.title,
-              experience: profileExperience.length > 0 ? `${profileExperience.length} positions` : 'Not specified',
-              status: 'Applied'
-            });
-          
-          if (applicantError) throw applicantError;
-
-          const {error: notificationError} = await client.from('notifications').insert({
-            user_id:user.id,
-            type:'application',
-            title:'Application submitted',
-            message:`Your application for ${j.title} at ${j.company} was submitted.`,
-            job_title:j.title,
-            company:j.company,
-            read:false
-          });
-          if(notificationError){
-            console.error('Could not create application notification:', notificationError);
-          }else{
-            await loadNotificationsFromSupabase();
-          }
-          
-          closeModal();
-          showToast('Application sent to ' + j.company);
-          return;
-        }
-      } catch (error) {
-        console.error('Error submitting application to Supabase:', error);
-        // Fall back to local notification
-      }
+    if(!client || !isSupabaseConfigured()){
+      showToast('Applications are unavailable because the backend is not configured');
+      return;
     }
-    
-    // Fallback - just show success message
-    closeModal();
-    showToast('Application sent to ' + j.company);
+    submitButton.disabled = true;
+    submitButton.textContent = 'Submitting...';
+    try{
+      const {data:{user}} = await client.auth.getUser();
+      if(!user) throw new Error('Sign in before submitting an application');
+      const {error} = await client.rpc('submit_job_application', {
+        p_job_id: String(j.id),
+        p_name: applicationData.name,
+        p_email: applicationData.email,
+        p_experience: profileExperience.length ? `${profileExperience.length} positions` : 'Not specified',
+        p_notes: applicationData.note || null
+      });
+      if(error) throw error;
+      appliedJobIds.add(String(j.id));
+      closeModal();
+      await loadNotificationsFromSupabase();
+      if(document.getElementById('jobList')) renderJobList();
+      showToast('Application submitted to ' + j.company);
+    }catch(error){
+      console.error('Error submitting application to Supabase:', error);
+      submitButton.disabled = false;
+      submitButton.innerHTML = `${icon('send')} Submit application`;
+      showToast(error.message || 'Could not submit your application. Please try again.');
+    }
   });
 }
 
@@ -3911,7 +3899,7 @@ async function renderApplicantsBody(){
   // Update local applicants from global APPLICANTS
   applicants = JSON.parse(JSON.stringify(APPLICANTS));
   
-  el.innerHTML=applicants.map(a=>`
+  el.innerHTML=applicants.length ? applicants.map(a=>`
     <tr>
       <td style="display:flex;align-items:center;gap:10px;"><div class="avatar" style="background:${colorFor(a.name)};width:30px;height:30px;font-size:11px;">${a.name.split(' ').map(w=>w[0]).join('')}</div>${a.name}</td>
       <td>${a.role}</td><td class="muted">${a.exp}</td>
@@ -3920,7 +3908,7 @@ async function renderApplicantsBody(){
         <button class="btn btn-sm btn-ghost" data-status="${a.id}:Shortlisted">Shortlist</button>
         <button class="btn btn-sm btn-outline" data-status="${a.id}:Rejected">Reject</button>
       </td>
-    </tr>`).join('');
+    </tr>`).join('') : '<tr><td colspan="5" class="muted" style="text-align:center;padding:28px;">No applications yet.</td></tr>';
   el.querySelectorAll('[data-status]').forEach(b=>b.addEventListener('click',async ()=>{
     const [id,status]=b.dataset.status.split(':');
     const a=applicants.find(x=>x.id==id);
@@ -4268,7 +4256,7 @@ async function afterRender(key){
     // Stop auto-sync when leaving jobs section
     stopJobsAutoSync();
   }
-  if(key==='jobseeker:mail'){
+  if(key==='jobseeker:mail' || key==='recruiter:mail'){
     // Mark notifications as read when clicked
     document.querySelectorAll('.mail-item').forEach(item => {
       item.addEventListener('click', async () => {
@@ -4283,6 +4271,11 @@ async function afterRender(key){
   if(key==='jobseeker:interview'){
     renderCatRow();
     renderFlipGrid();
+  }
+  if(key==='jobseeker:jobs'){
+    loadMyApplicationsFromSupabase().then(()=>{
+      if(document.getElementById('jobList')) renderJobList();
+    });
   }
   if(key==='jobseeker:assistant'){
     interviewChatMessages.forEach(message => addChatMessage(message.sender, message.message, false));

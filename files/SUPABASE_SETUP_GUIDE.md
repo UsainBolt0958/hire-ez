@@ -83,6 +83,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_jobseeker_profiles_user_unique ON public.j
 CREATE UNIQUE INDEX IF NOT EXISTS idx_recruiter_profiles_user_unique ON public.recruiter_profiles(user_id);
 ```
 
+For an existing project, also run the contents of `supabase-application-workflow.sql` in the SQL Editor. This installs the authenticated transaction used by Apply. It creates the application, recruiter applicant record, and in-app Mail notifications together, so a partial save cannot be reported as a successful application.
+
 ## Step 6: Add Sample Data (Optional)
 
 If you want to start with sample data, run these SQL queries in the SQL Editor:
@@ -145,6 +147,7 @@ INSERT INTO public.interview_questions (category, question, tip) VALUES
 6. Complete the onboarding process
 7. Check the Supabase dashboard → **Authentication** → **Users** to see the new user
 8. Check the database tables to see the profile data
+9. Apply to a job, then verify the application appears in the jobseeker's applied state and the recruiter's Applicants and Mail sections
 
 ## Step 8: Test Data Loading
 
@@ -208,6 +211,8 @@ Once your Supabase backend is working:
 3. **Enable RLS**: Keep Row Level Security enabled to protect user data
 4. **Regular backups**: Enable Supabase automated backups
 5. **Monitor usage**: Keep an eye on your Supabase usage and limits
+
+Hire-ez Mail is in-app notification delivery. Sending separate email messages requires configuring a server-side email provider (for example, a Supabase Edge Function with provider credentials); those credentials must not be placed in the browser app.
 
 ## Support
 
